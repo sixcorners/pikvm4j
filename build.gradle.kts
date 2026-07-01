@@ -41,10 +41,7 @@ tasks {
 testing { suites { named<JvmTestSuite>("test") { useJUnitJupiter() } } }
 
 spotless {
-  java {
-    googleJavaFormat()
-    target("src/main/java", "build/generate-resources/main/src/main/java")
-  }
+  java { googleJavaFormat() }
   kotlinGradle { ktfmt() }
 }
 
