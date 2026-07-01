@@ -1,12 +1,11 @@
-package info.sixcorners.openapi_generator_client.api;
-
-import info.sixcorners.openapi_generator_client.model.GeneratorInput;
-import org.junit.jupiter.api.Test;
-
-import org.eclipse.microprofile.rest.client.RestClientBuilder;
+package com.github.sixcorners.openapi_generator_client.api;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import com.github.sixcorners.openapi_generator_client.model.GeneratorInput;
+import org.eclipse.microprofile.rest.client.RestClientBuilder;
+import org.junit.jupiter.api.Test;
 
 public class ServersApiTest {
   private static final ServersApi client =

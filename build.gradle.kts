@@ -11,7 +11,7 @@ plugins {
   id("org.openapi.generator") version "7.23.0"
 }
 
-group = "info.sixcorners"
+group = "com.github.sixcorners"
 
 repositories { mavenCentral() }
 

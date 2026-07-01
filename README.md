@@ -5,7 +5,8 @@ You need both a MicroProfile Rest Client implementation and a Jakarta JSON Bindi
 ```java
 //DEPS org.jboss.resteasy.microprofile:microprofile-rest-client:3.0.1.Final
 //DEPS org.jboss.resteasy:resteasy-json-binding-provider:7.0.2.Final
-//DEPS info.sixcorners:openapi-generator-client:1.0.0
+//DEPS com.github.sixcorners:openapi-generator-client:1.0.0
+//REPOS central,https://jitpack.io
 
 import org.eclipse.microprofile.rest.client.RestClientBuilder;
 import info.sixcorners.openapi_generator_client.api.ClientsApi;
