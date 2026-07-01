@@ -60,9 +60,7 @@ openApiGenerate {
   configOptions.put("useRuntimeException", "true")
 }
 
-sourceSets {
-  main { java { srcDir(layout.buildDirectory.dir("generate-resources/main/src/main/java")) } }
-}
+sourceSets { main { java { srcDir(openApiGenerate.outputDir.dir("src/main/java")) } } }
 
 publishing {
   publications {
