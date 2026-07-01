@@ -6,12 +6,14 @@ plugins {
   id("com.diffplug.spotless") version "8.8.0"
   id("net.ltgt.errorprone") version "5.1.0"
   id("io.freefair.lombok") version "9.5.0"
-  id("io.freefair.git-version") version "9.5.0"
+  id("pl.allegro.tech.build.axion-release") version "1.21.2"
   id("org.kordamp.gradle.jandex") version "2.3.0"
   id("org.openapi.generator") version "7.23.0"
 }
 
 group = "com.github.sixcorners"
+
+version = scmVersion.version
 
 repositories { mavenCentral() }
 
