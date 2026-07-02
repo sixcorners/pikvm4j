@@ -23,8 +23,7 @@ jobs:
         with:
           gradle-version: current
       - run: |
-          gradle clean openApiGenerate
-          gradle spotlessApply
+          gradle clean openApiGenerate spotlessApply
           git add -f build/generate-resources/main/src/main/java
           if git diff --cached --quiet
           then
