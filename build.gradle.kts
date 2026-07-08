@@ -58,6 +58,7 @@ openApiGenerate {
   configOptions.put("microprofileRestClientVersion", "3.0")
   configOptions.put("useBeanValidation", "true")
   configOptions.put("useRuntimeException", "true")
+  configOptions.put("useSingleRequestParameter", "true")
 }
 
 sourceSets { main { java { srcDir(openApiGenerate.outputDir.dir("src/main/java")) } } }
