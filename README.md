@@ -9,7 +9,7 @@ You need both a MicroProfile Rest Client implementation and a Jakarta JSON Bindi
 //REPOS central,https://jitpack.io
 
 import org.eclipse.microprofile.rest.client.RestClientBuilder;
-import info.sixcorners.openapi_generator_client.api.ClientsApi;
+import com.github.sixcorners.openapi_generator_client.api.ClientsApi;
 
 void main() {
   RestClientBuilder.newBuilder()

@@ -16,22 +16,24 @@ public class ServersApiTest {
 
   @Test
   public void downloadFileTest() {
-    var fileId = "asdf";
-    assertThrows(ApiException.class, () -> client.downloadFile(fileId));
+    var req = ServersApi.DownloadFileRequest.newInstance();
+    req.fileId("asdf");
+    assertThrows(ApiException.class, () -> client.downloadFile(req));
   }
 
   @Test
   public void generateServerForLanguageTest() {
-    var framework = "java";
+    var req = ServersApi.GenerateServerForLanguageRequest.newInstance();
+    req.framework("java");
     var generatorInput = new GeneratorInput();
-    assertThrows(
-        ApiException.class, () -> client.generateServerForLanguage(framework, generatorInput));
+    assertThrows(ApiException.class, () -> client.generateServerForLanguage(req, generatorInput));
   }
 
   @Test
   public void getServerOptionsTest() {
-    var framework = "java";
-    var response = client.getServerOptions(framework);
+    var req = ServersApi.GetServerOptionsRequest.newInstance();
+    req.framework("java");
+    var response = client.getServerOptions(req);
     assertNotNull(response);
   }
 

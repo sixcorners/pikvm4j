@@ -22,21 +22,24 @@ public class ClientsApiTest {
 
   @Test
   public void downloadFileTest() {
-    var fileId = "asdf";
-    assertThrows(ApiException.class, () -> client.downloadFile(fileId));
+    var req = ClientsApi.DownloadFileRequest.newInstance();
+    req.fileId("asdf");
+    assertThrows(ApiException.class, () -> client.downloadFile(req));
   }
 
   @Test
   public void generateClientTest() {
-    var language = "java";
+    var req = ClientsApi.GenerateClientRequest.newInstance();
+    req.language("java");
     var generatorInput = new GeneratorInput();
-    assertThrows(ApiException.class, () -> client.generateClient(language, generatorInput));
+    assertThrows(ApiException.class, () -> client.generateClient(req, generatorInput));
   }
 
   @Test
   public void getClientOptionsTest() {
-    var language = "java";
-    var response = client.getClientOptions(language);
+    var req = ClientsApi.GetClientOptionsRequest.newInstance();
+    req.language("java");
+    var response = client.getClientOptions(req);
     assertNotNull(response);
   }
 }
