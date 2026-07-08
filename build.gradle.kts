@@ -47,8 +47,9 @@ spotless {
 }
 
 openApiGenerate {
-  setInputSpec("https://api.openapi-generator.tech/api-docs")
-  skipValidateSpec = true
+  setInputSpec(
+      "https://raw.githubusercontent.com/rclone/rclone-openapi/refs/heads/main/openapi.yaml"
+  )
   invokerPackage = "${project.group}.${project.name}"
   apiPackage = "${invokerPackage.get()}.api"
   modelPackage = "${invokerPackage.get()}.model"
@@ -61,6 +62,7 @@ openApiGenerate {
   configOptions.put("useRuntimeException", "true")
   configOptions.put("useSingleRequestParameter", "true")
   configOptions.put("microprofileGlobalExceptionMapper", "false")
+  nameMappings.put("_group", $$"$group")
 }
 
 sourceSets { main { java { srcDir(openApiGenerate.outputDir.dir("src/main/java")) } } }
