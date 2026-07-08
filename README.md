@@ -8,9 +8,10 @@ You need both a MicroProfile Rest Client implementation and a Jakarta JSON Bindi
 //DEPS com.github.sixcorners:rclone4j-rc:1.0.0
 //REPOS central,https://jitpack.io
 
-import org.eclipse.microprofile.rest.client.RestClientBuilder;
-import com.github.sixcorners.rclone4j_rc.api.DefaultApi;
 import com.github.sixcorners.rclone4j_rc.ForceJsonFilter;
+import com.github.sixcorners.rclone4j_rc.api.DefaultApi;
+import com.github.sixcorners.rclone4j_rc.model.RcListRequestBody;
+import org.eclipse.microprofile.rest.client.RestClientBuilder;
 
 void main() {
   RestClientBuilder.newBuilder()
@@ -18,7 +19,7 @@ void main() {
       .property("microprofile.rest.client.disable.default.mapper", true) // ??
       .register(ForceJsonFilter.class)
       .build(DefaultApi.class)
-      .rcList(DefaultApi.RcListRequest.newInstance(), DefaultApi.RcListRequest.newInstance())
+      .rcList(DefaultApi.RcListRequest.newInstance(), new RcListRequestBody())
       .getCommands()
       .forEach(System.out::println);
 }
