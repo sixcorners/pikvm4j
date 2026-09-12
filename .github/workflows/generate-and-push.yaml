@@ -1,4 +1,8 @@
+name: Build and release
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: 0 0 * * 0
   workflow_dispatch:
@@ -14,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # axion-release derives the version from tags
+          fetch-depth: 0
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -22,13 +29,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: current
-      - run: |
-          gradle clean openApiGenerate spotlessApply
-          git add -f build/generate-resources/main/src/main/java
-          if git diff --cached --quiet
+      - name: Generate, compile and test
+        run: gradle clean build
+      - name: Tag the next release
+        run: |
+          if git describe --tags --exact-match HEAD
           then
-            echo No changes to commit
+            echo HEAD is already released
           else
-            git commit -m 'chore: automated periodic openapi generation'
-            git push
+            gradle createRelease
+            git push --tags
           fi
