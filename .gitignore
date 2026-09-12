@@ -41,3 +41,5 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+# Local PiKVM credentials for LiveDeviceTest, see .env.example
+/.env
