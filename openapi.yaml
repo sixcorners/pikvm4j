@@ -1,0 +1,2887 @@
+openapi: 3.0.3
+info:
+  title: PiKVM API
+  version: "4.215"
+  description: |
+    HTTP API of the PiKVM `kvmd` daemon, as exposed through the Nginx entry point
+    under the `/api` prefix.
+
+    Written from https://docs.pikvm.org/api/ and the `kvmd` sources
+    (https://github.com/pikvm/kvmd/tree/master/kvmd/apps/kvmd/api) and checked
+    against a real PiKVM V4 Plus running KVMD 4.215.
+
+    ## Authentication
+
+    Every handle except `POST /api/auth/login` and `GET /api/redfish/v1` requires
+    authentication. Any of the following can be used per request:
+
+    * `X-KVMD-User` / `X-KVMD-Passwd` headers.
+    * HTTP Basic authentication (no `WWW-Authenticate` challenge is sent).
+    * The `auth_token` cookie obtained from `POST /api/auth/login`.
+
+    With two-factor authentication enabled the current TOTP code must be appended
+    to the password without a separator, e.g. password `foobar` and code `123456`
+    become `foobar123456`.
+
+    ## Response envelope
+
+    Most handles answer with `{"ok": true, "result": {...}}`. Errors use the same
+    envelope with `ok: false` and `result: {"error": "<ExceptionClassName>",
+    "error_msg": "<message>"}` together with a 4xx/5xx status. The Redfish handles,
+    the log, the Prometheus export and binary handles do not use the envelope.
+
+    ## Not covered
+
+    `GET /api/ws` (WebSocket event stream) can not be described in OpenAPI and is
+    omitted.
+  license:
+    name: GPL-3.0-or-later
+    url: https://github.com/pikvm/kvmd/blob/master/LICENSE
+externalDocs:
+  description: PiKVM HTTP API reference
+  url: https://docs.pikvm.org/api/
+
+servers:
+  - url: https://pikvm
+    description: A PiKVM device (self-signed certificate by default)
+
+security:
+  - kvmdUser: []
+    kvmdPasswd: []
+  - basicAuth: []
+  - cookieAuth: []
+
+tags:
+  - name: auth
+    description: Session handling
+  - name: system
+    description: Device information and logs
+  - name: hid
+    description: Emulated keyboard and mouse
+  - name: atx
+    description: ATX power control of the attached host
+  - name: msd
+    description: Mass Storage Drive images
+  - name: gpio
+    description: User GPIO channels
+  - name: streamer
+    description: Video streamer, snapshots and OCR
+  - name: switch
+    description: PiKVM Switch
+  - name: redfish
+    description: DMTF Redfish compatible power control
+  - name: export
+    description: Metrics export
+
+paths:
+  /api/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Log in and receive a session cookie
+      description: |
+        On success the response carries a `Set-Cookie: auth_token=...` header.
+        If `redirect` is set to one of the allowed values the server answers with
+        `302 Found` to that location instead of the JSON envelope.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/LoginForm"
+      responses:
+        "200":
+          description: Logged in
+          headers:
+            Set-Cookie:
+              description: Session cookie, `auth_token=<token>; Path=/`
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "302":
+          description: Logged in, redirecting to the requested location
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Invalidate the current session token
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/auth/check:
+    get:
+      tags: [auth]
+      operationId: checkAuth
+      summary: Check whether the request is authenticated
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/info:
+    get:
+      tags: [system]
+      operationId: getInfo
+      summary: Get general information about the device
+      parameters:
+        - name: fields
+          in: query
+          description: |
+            Comma-separated list of categories to return. Known categories are
+            `auth`, `extras`, `fan`, `hw` (legacy only), `health` (non-legacy
+            only), `meta`, `node`, `system` and `uptime`; the set depends on the
+            KVMD version.
+          schema:
+            type: string
+            example: hw,system
+        - name: legacy
+          in: query
+          description: |
+            When `true` (the default) the `health` and `platform` data are
+            reported under the `hw` category as in older KVMD versions. When
+            `false`, `health` is a top level category and `platform` is part of
+            `system`.
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "200":
+          description: Device information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InfoResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/log:
+    get:
+      tags: [system]
+      operationId: getLog
+      summary: Get the log of all KVMD services as plain text
+      description: |
+        With `follow=true` the response never ends and new records are streamed
+        as they appear; a client that buffers the whole body will not return.
+      parameters:
+        - name: follow
+          in: query
+          description: Keep the connection open and stream new records
+          schema:
+            type: boolean
+            default: false
+        - name: seek
+          in: query
+          description: Return records from the last `seek` seconds
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Log records, one per line
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/export/prometheus/metrics:
+    get:
+      tags: [export]
+      operationId: getPrometheusMetrics
+      summary: Get Prometheus metrics
+      responses:
+        "200":
+          description: Metrics in the Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid:
+    get:
+      tags: [hid]
+      operationId: getHidState
+      summary: Get the HID devices state
+      responses:
+        "200":
+          description: HID state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HidStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/set_params:
+    post:
+      tags: [hid]
+      operationId: setHidParams
+      summary: Configure the emulated keyboard and mouse
+      parameters:
+        - name: keyboard_output
+          in: query
+          schema:
+            $ref: "#/components/schemas/KeyboardOutput"
+        - name: mouse_output
+          in: query
+          schema:
+            $ref: "#/components/schemas/MouseOutput"
+        - name: jiggler
+          in: query
+          description: Enable or disable the mouse jiggler
+          schema:
+            type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/set_connected:
+    post:
+      tags: [hid]
+      operationId: setHidConnected
+      summary: Connect or disconnect the HID devices from the host
+      parameters:
+        - name: connected
+          in: query
+          required: true
+          schema:
+            type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/reset:
+    post:
+      tags: [hid]
+      operationId: resetHid
+      summary: Reset the HID devices to their initial state
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/inactivity:
+    get:
+      tags: [hid]
+      operationId: getHidInactivity
+      summary: Get the number of seconds since the last HID event
+      responses:
+        "200":
+          description: Inactivity time
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HidInactivityResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/keymaps:
+    get:
+      tags: [hid]
+      operationId: getHidKeymaps
+      summary: Get the keyboard layouts available for `POST /api/hid/print`
+      responses:
+        "200":
+          description: Keymaps
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HidKeymapsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/print:
+    post:
+      tags: [hid]
+      operationId: printText
+      summary: Type the request body text on the host
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of characters to type, `0` for no limit
+          schema:
+            type: integer
+            minimum: 0
+            default: 1024
+        - name: keymap
+          in: query
+          description: Keymap name from `GET /api/hid/keymaps`, the default keymap when omitted
+          schema:
+            type: string
+        - name: slow
+          in: query
+          description: Type with a delay between key presses
+          schema:
+            type: boolean
+            default: false
+        - name: delay
+          in: query
+          description: Delay between key presses in seconds, defaults to `0.02` when `slow` is set and `0` otherwise
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 5
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/events/send_shortcut:
+    post:
+      tags: [hid]
+      operationId: sendShortcut
+      summary: Press and release a key combination
+      parameters:
+        - name: keys
+          in: query
+          required: true
+          description: Comma-separated key names from the `web_name` column of https://github.com/pikvm/kvmd/blob/master/keymap.csv
+          schema:
+            type: string
+            example: ControlLeft,KeyL
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/events/send_key:
+    post:
+      tags: [hid]
+      operationId: sendKey
+      summary: Send a single key event
+      description: When `state` is omitted the key is pressed and released.
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: Key name from the `web_name` column of https://github.com/pikvm/kvmd/blob/master/keymap.csv
+          schema:
+            type: string
+            example: Delete
+        - name: state
+          in: query
+          description: "`true` to press, `false` to release"
+          schema:
+            type: boolean
+        - name: finish
+          in: query
+          description: Release non-modifier keys right after pressing them
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/events/send_mouse_button:
+    post:
+      tags: [hid]
+      operationId: sendMouseButton
+      summary: Send a mouse button event
+      description: When `state` is omitted the button is pressed and released.
+      parameters:
+        - name: button
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/MouseButton"
+        - name: state
+          in: query
+          description: "`true` to press, `false` to release"
+          schema:
+            type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/events/send_mouse_move:
+    post:
+      tags: [hid]
+      operationId: sendMouseMove
+      summary: Move the mouse pointer to absolute coordinates
+      description: |
+        Coordinates range from -32768 to 32767 where 0,0 is the centre of the
+        screen. Only works with an absolute mouse.
+      parameters:
+        - name: to_x
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: -32768
+            maximum: 32767
+        - name: to_y
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: -32768
+            maximum: 32767
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/events/send_mouse_relative:
+    post:
+      tags: [hid]
+      operationId: sendMouseRelative
+      summary: Move the mouse pointer by a relative offset
+      parameters:
+        - $ref: "#/components/parameters/deltaX"
+        - $ref: "#/components/parameters/deltaY"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/hid/events/send_mouse_wheel:
+    post:
+      tags: [hid]
+      operationId: sendMouseWheel
+      summary: Scroll the mouse wheel
+      parameters:
+        - $ref: "#/components/parameters/deltaX"
+        - $ref: "#/components/parameters/deltaY"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/atx:
+    get:
+      tags: [atx]
+      operationId: getAtxState
+      summary: Get the ATX state
+      responses:
+        "200":
+          description: ATX state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AtxStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/atx/power:
+    post:
+      tags: [atx]
+      operationId: setAtxPower
+      summary: Change the ATX power state
+      parameters:
+        - name: action
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/AtxPowerAction"
+        - $ref: "#/components/parameters/wait"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/atx/click:
+    post:
+      tags: [atx]
+      operationId: clickAtxButton
+      summary: Click an ATX button
+      parameters:
+        - name: button
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/AtxButton"
+        - $ref: "#/components/parameters/wait"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/msd:
+    get:
+      tags: [msd]
+      operationId: getMsdState
+      summary: Get the Mass Storage Drive state
+      responses:
+        "200":
+          description: MSD state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MsdStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/msd/set_params:
+    post:
+      tags: [msd]
+      operationId: setMsdParams
+      summary: Select the current image and set drive parameters
+      parameters:
+        - name: image
+          in: query
+          description: Name of the image to select, an empty string ejects the current image
+          schema:
+            type: string
+        - name: cdrom
+          in: query
+          description: "`true` for a CD-ROM, `false` for a flash drive"
+          schema:
+            type: boolean
+        - name: rw
+          in: query
+          description: Read-write mode, ignored (always read-only) for a CD-ROM
+          schema:
+            type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/msd/set_connected:
+    post:
+      tags: [msd]
+      operationId: setMsdConnected
+      summary: Connect or disconnect the drive from the host
+      parameters:
+        - name: connected
+          in: query
+          required: true
+          schema:
+            type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/msd/read:
+    get:
+      tags: [msd]
+      operationId: readMsdImage
+      summary: Download an image
+      parameters:
+        - name: image
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: compress
+          in: query
+          description: Compress the image on the fly
+          schema:
+            $ref: "#/components/schemas/MsdCompression"
+      responses:
+        "200":
+          description: Image data, with a `Content-Disposition` attachment header
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                $ref: "#/components/schemas/BinaryStream"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/msd/write:
+    post:
+      tags: [msd]
+      operationId: writeMsdImage
+      summary: Upload an image
+      description: The request must carry a `Content-Length` header.
+      parameters:
+        - name: image
+          in: query
+          required: true
+          description: Name to store the image under
+          schema:
+            type: string
+            example: test.iso
+        - name: prefix
+          in: query
+          description: Directory prefix for the image name
+          schema:
+            type: string
+        - name: remove_incomplete
+          in: query
+          description: Remove the image if the upload is interrupted
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Upload finished
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MsdWriteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/msd/write_remote:
+    post:
+      tags: [msd]
+      operationId: writeMsdImageRemote
+      summary: Download an image from an HTTP(S) URL to the drive
+      description: |
+        Long-polling request. The response is a stream of newline-delimited JSON
+        progress objects, one per second, followed by a final one. Do not close the
+        connection before the download is complete or the download stops.
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+        - name: image
+          in: query
+          description: Name to store the image under, taken from the URL when omitted
+          schema:
+            type: string
+        - name: prefix
+          in: query
+          description: Directory prefix for the image name
+          schema:
+            type: string
+        - name: insecure
+          in: query
+          description: Skip TLS certificate verification of the remote server
+          schema:
+            type: boolean
+            default: false
+        - name: timeout
+          in: query
+          description: Remote connection timeout in seconds
+          schema:
+            type: number
+            format: float
+            minimum: 0.1
+            default: 10
+        - name: remove_incomplete
+          in: query
+          description: Remove the image if the download is interrupted
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Progress stream; the last object may be an error envelope
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/msd/remove:
+    post:
+      tags: [msd]
+      operationId: removeMsdImage
+      summary: Remove an image
+      parameters:
+        - name: image
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/msd/reset:
+    post:
+      tags: [msd]
+      operationId: resetMsd
+      summary: Reset the drive to its default state
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/gpio:
+    get:
+      tags: [gpio]
+      operationId: getGpioState
+      summary: Get the model and state of all GPIO channels
+      responses:
+        "200":
+          description: GPIO state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GpioStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/gpio/switch:
+    post:
+      tags: [gpio]
+      operationId: switchGpio
+      summary: Set an output channel on or off
+      parameters:
+        - $ref: "#/components/parameters/gpioChannel"
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: boolean
+        - $ref: "#/components/parameters/wait"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/gpio/pulse:
+    post:
+      tags: [gpio]
+      operationId: pulseGpio
+      summary: Pulse an output channel
+      parameters:
+        - $ref: "#/components/parameters/gpioChannel"
+        - name: delay
+          in: query
+          description: Pulse length in seconds, `0` for the channel default
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            default: 0
+        - $ref: "#/components/parameters/wait"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Busy"
+
+  /api/streamer:
+    get:
+      tags: [streamer]
+      operationId: getStreamerState
+      summary: Get the streamer state
+      responses:
+        "200":
+          description: Streamer state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StreamerStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/streamer/set_params:
+    post:
+      tags: [streamer]
+      operationId: setStreamerParams
+      summary: Change streamer parameters
+      description: Parameters not supported by the device (see `features`) are rejected.
+      parameters:
+        - name: quality
+          in: query
+          description: JPEG quality
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: desired_fps
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 120
+        - name: resolution
+          in: query
+          description: Capture resolution as `WIDTHxHEIGHT`
+          schema:
+            type: string
+            pattern: "^[0-9]+x[0-9]+$"
+            example: 1280x720
+        - name: h264_bitrate
+          in: query
+          description: H.264 bitrate in kbit/s
+          schema:
+            type: integer
+            minimum: 25
+            maximum: 20000
+        - name: h264_gop
+          in: query
+          description: H.264 group of pictures size
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 60
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/streamer/reset:
+    post:
+      tags: [streamer]
+      operationId: resetStreamer
+      summary: Restart the streamer
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/streamer/snapshot:
+    get:
+      tags: [streamer]
+      operationId: takeSnapshot
+      summary: Take a snapshot of the video stream
+      description: |
+        Returns a JPEG image by default. With `ocr=true` the recognised text is
+        returned as `text/plain` instead. With `preview=true` a downscaled JPEG is
+        returned. OCR region coordinates start at the top left corner; `-1` means
+        the whole image.
+      parameters:
+        - name: save
+          in: query
+          description: Keep the snapshot in memory for later `load`
+          schema:
+            type: boolean
+            default: false
+        - name: load
+          in: query
+          description: Use the previously saved snapshot instead of capturing a new one
+          schema:
+            type: boolean
+            default: false
+        - name: allow_offline
+          in: query
+          description: Return a placeholder image when there is no video signal
+          schema:
+            type: boolean
+            default: false
+        - name: ocr
+          in: query
+          description: Run optical character recognition and return the text
+          schema:
+            type: boolean
+            default: false
+        - name: ocr_langs
+          in: query
+          description: Comma-separated Tesseract language codes, the OCR defaults when omitted
+          schema:
+            type: string
+            example: eng
+        - name: ocr_left
+          in: query
+          schema:
+            type: integer
+            default: -1
+        - name: ocr_top
+          in: query
+          schema:
+            type: integer
+            default: -1
+        - name: ocr_right
+          in: query
+          schema:
+            type: integer
+            default: -1
+        - name: ocr_bottom
+          in: query
+          schema:
+            type: integer
+            default: -1
+        - name: preview
+          in: query
+          description: Return a downscaled preview
+          schema:
+            type: boolean
+            default: false
+        - name: preview_max_width
+          in: query
+          description: "`0` keeps the original width"
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: preview_max_height
+          in: query
+          description: "`0` keeps the original height"
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: preview_quality
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 80
+      responses:
+        "200":
+          description: The snapshot or the recognised text
+          content:
+            image/jpeg:
+              schema:
+                $ref: "#/components/schemas/BinaryDownload"
+            text/plain:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: No snapshot available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [streamer]
+      operationId: removeSnapshot
+      summary: Remove the saved snapshot
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/streamer/ocr:
+    get:
+      tags: [streamer]
+      operationId: getOcrState
+      summary: Get the OCR service state
+      responses:
+        "200":
+          description: OCR state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OcrStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch:
+    get:
+      tags: [switch]
+      operationId: getSwitchState
+      summary: Get the PiKVM Switch state
+      responses:
+        "200":
+          description: Switch state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SwitchStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/set_active_prev:
+    post:
+      tags: [switch]
+      operationId: setSwitchActivePrev
+      summary: Switch to the previous port
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/set_active_next:
+    post:
+      tags: [switch]
+      operationId: setSwitchActiveNext
+      summary: Switch to the next port
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/set_active:
+    post:
+      tags: [switch]
+      operationId: setSwitchActive
+      summary: Switch to a specific port
+      parameters:
+        - $ref: "#/components/parameters/switchPort"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/set_beacon:
+    post:
+      tags: [switch]
+      operationId: setSwitchBeacon
+      summary: Turn a beacon LED on or off
+      description: Exactly one of `port`, `uplink` or `downlink` selects the beacon.
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: boolean
+        - name: port
+          in: query
+          description: Port beacon, see `switchPort`
+          schema:
+            type: number
+            format: float
+            minimum: 0
+        - name: uplink
+          in: query
+          description: Unit number of the uplink beacon
+          schema:
+            type: integer
+            minimum: 0
+        - name: downlink
+          in: query
+          description: Unit number of the downlink beacon
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/set_port_params:
+    post:
+      tags: [switch]
+      operationId: setSwitchPortParams
+      summary: Configure a port
+      parameters:
+        - $ref: "#/components/parameters/switchPort"
+        - name: edid_id
+          in: query
+          description: EDID identifier (UUID) or `default`
+          schema:
+            type: string
+        - name: dummy
+          in: query
+          description: Pretend a display is attached to the host
+          schema:
+            type: boolean
+        - name: name
+          in: query
+          description: Port name, up to 255 printable characters
+          schema:
+            type: string
+        - name: atx_click_power_delay
+          in: query
+          description: Seconds
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 10
+        - name: atx_click_power_long_delay
+          in: query
+          description: Seconds
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 10
+        - name: atx_click_reset_delay
+          in: query
+          description: Seconds
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 10
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/set_colors:
+    post:
+      tags: [switch]
+      operationId: setSwitchColors
+      summary: Set the LED colors of the switch and its downlinks
+      description: |
+        Each color is `RRGGBB:BB:IIII` - RGB hex, brightness hex and blink
+        interval in milliseconds as four hex digits, e.g. `FFA500:BF:0028` is
+        orange at 75% brightness blinking every 40 ms. `default` restores the
+        built-in color.
+      parameters:
+        - name: inactive
+          in: query
+          schema:
+            $ref: "#/components/schemas/SwitchColorSpec"
+        - name: active
+          in: query
+          schema:
+            $ref: "#/components/schemas/SwitchColorSpec"
+        - name: flashing
+          in: query
+          schema:
+            $ref: "#/components/schemas/SwitchColorSpec"
+        - name: beacon
+          in: query
+          schema:
+            $ref: "#/components/schemas/SwitchColorSpec"
+        - name: bootloader
+          in: query
+          schema:
+            $ref: "#/components/schemas/SwitchColorSpec"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/reset:
+    post:
+      tags: [switch]
+      operationId: resetSwitch
+      summary: Reboot a switch unit
+      parameters:
+        - name: unit
+          in: query
+          required: true
+          description: Unit number in the downlink chain, `0` is the first switch
+          schema:
+            type: integer
+            minimum: 0
+        - name: bootloader
+          in: query
+          description: Enter the reflashing mode after the reboot
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/edids/create:
+    post:
+      tags: [switch]
+      operationId: createSwitchEdid
+      summary: Create an EDID configuration
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: data
+          in: query
+          required: true
+          description: 128 or 256 bytes of EDID data as a hex string
+          schema:
+            type: string
+            pattern: "^([0-9a-fA-F]{256}|[0-9a-fA-F]{512})$"
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SwitchEdidCreateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/edids/change:
+    post:
+      tags: [switch]
+      operationId: changeSwitchEdid
+      summary: Modify an EDID configuration
+      parameters:
+        - $ref: "#/components/parameters/edidId"
+        - name: name
+          in: query
+          schema:
+            type: string
+        - name: data
+          in: query
+          description: 128 or 256 bytes of EDID data as a hex string
+          schema:
+            type: string
+            pattern: "^([0-9a-fA-F]{256}|[0-9a-fA-F]{512})$"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/edids/remove:
+    post:
+      tags: [switch]
+      operationId: removeSwitchEdid
+      summary: Delete an EDID configuration
+      parameters:
+        - $ref: "#/components/parameters/edidId"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/atx/power:
+    post:
+      tags: [switch]
+      operationId: setSwitchAtxPower
+      summary: Change the ATX power state of a port
+      parameters:
+        - $ref: "#/components/parameters/switchPort"
+        - name: action
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/AtxPowerAction"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/switch/atx/click:
+    post:
+      tags: [switch]
+      operationId: clickSwitchAtxButton
+      summary: Click an ATX button of a port
+      parameters:
+        - $ref: "#/components/parameters/switchPort"
+        - name: button
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/AtxButton"
+      responses:
+        "200":
+          $ref: "#/components/responses/Ok"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/redfish/v1:
+    get:
+      tags: [redfish]
+      operationId: getRedfishRoot
+      summary: Redfish service root
+      security: []
+      responses:
+        "200":
+          description: Service root
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedfishServiceRoot"
+
+  /api/redfish/v1/Managers:
+    get:
+      tags: [redfish]
+      operationId: getRedfishManagers
+      summary: Redfish manager collection
+      responses:
+        "200":
+          description: Manager collection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedfishCollection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/redfish/v1/Systems:
+    get:
+      tags: [redfish]
+      operationId: getRedfishSystems
+      summary: Redfish computer system collection
+      description: Contains the host attached to the PiKVM (`0`) and one `SwitchPort<n>` per PiKVM Switch port.
+      responses:
+        "200":
+          description: System collection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedfishCollection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/redfish/v1/Systems/{systemId}:
+    parameters:
+      - $ref: "#/components/parameters/redfishSystemId"
+    get:
+      tags: [redfish]
+      operationId: getRedfishSystem
+      summary: Redfish computer system
+      responses:
+        "200":
+          description: Computer system
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedfishComputerSystem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Unknown system
+    patch:
+      tags: [redfish]
+      operationId: patchRedfishSystem
+      summary: Update the computer system (no-op)
+      description: Accepted for compatibility with installers such as OKD; does nothing.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "204":
+          description: Success
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/redfish/v1/Systems/{systemId}/Actions/ComputerSystem.Reset:
+    parameters:
+      - $ref: "#/components/parameters/redfishSystemId"
+    post:
+      tags: [redfish]
+      operationId: resetRedfishSystem
+      summary: Redfish power control
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedfishResetBody"
+      responses:
+        "204":
+          description: Success
+        "400":
+          description: Invalid or missing `ResetType`
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+components:
+  securitySchemes:
+    kvmdUser:
+      type: apiKey
+      in: header
+      name: X-KVMD-User
+      description: User name; must be sent together with `X-KVMD-Passwd`
+    kvmdPasswd:
+      type: apiKey
+      in: header
+      name: X-KVMD-Passwd
+      description: Password, with the TOTP code appended when 2FA is enabled
+    basicAuth:
+      type: http
+      scheme: basic
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: auth_token
+      description: Session token from `POST /api/auth/login`
+
+  parameters:
+    wait:
+      name: wait
+      in: query
+      description: Return after the operation finishes instead of immediately
+      schema:
+        type: boolean
+        default: false
+    deltaX:
+      name: delta_x
+      in: query
+      required: true
+      schema:
+        type: integer
+        minimum: -127
+        maximum: 127
+    deltaY:
+      name: delta_y
+      in: query
+      required: true
+      schema:
+        type: integer
+        minimum: -127
+        maximum: 127
+    gpioChannel:
+      name: channel
+      in: query
+      required: true
+      description: Channel name from the GPIO model
+      schema:
+        type: string
+        example: led1
+    switchPort:
+      name: port
+      in: query
+      required: true
+      description: |
+        Port as a continuous number (`0`..`19` across all units) or as
+        `unit.port` in `1.1` form where the integer part is the 1-based unit and the
+        fraction the 1-based port on that unit.
+      schema:
+        type: number
+        format: float
+        minimum: 0
+    edidId:
+      name: id
+      in: query
+      required: true
+      description: EDID identifier (UUID)
+      schema:
+        type: string
+        format: uuid
+    redfishSystemId:
+      name: systemId
+      in: path
+      required: true
+      description: "`0` for the directly attached host or `SwitchPort<n>` for a switch port"
+      schema:
+        type: string
+        example: "0"
+
+  responses:
+    Ok:
+      description: Success
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OkResponse"
+    BadRequest:
+      description: Invalid parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: No credentials supplied
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Invalid credentials or token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Busy:
+      description: The subsystem is busy with another operation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    BinaryDownload:
+      type: string
+      format: binary
+      description: Small binary payload, mapped to `byte[]` by the Java generator
+    BinaryStream:
+      type: string
+      format: binary
+      description: Large binary payload, mapped to `java.io.InputStream` by the Java generator
+    MsdCompression:
+      type: string
+      enum: [none, lzma, zstd]
+
+    OkResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          type: object
+          additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+          example: false
+        result:
+          $ref: "#/components/schemas/ErrorResult"
+    ErrorResult:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Python exception class name
+          example: ValidatorError
+        error_msg:
+          type: string
+
+    LoginForm:
+      type: object
+      required: [user, passwd]
+      properties:
+        user:
+          type: string
+        passwd:
+          type: string
+          description: Password, with the TOTP code appended when 2FA is enabled
+        expire:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Token lifetime in seconds, `0` for no expiration
+        redirect:
+          type: string
+          description: Location to redirect to after login; must be one of the configured allowed values (`/`, `/kvm`, `/kvm/` by default)
+
+    KeyboardOutput:
+      type: string
+      enum: [usb, ps2, disabled]
+    MouseOutput:
+      type: string
+      enum: [usb, usb_win98, usb_rel, ps2, disabled]
+    MouseButton:
+      type: string
+      enum: [left, right, middle, up, down]
+    AtxPowerAction:
+      type: string
+      description: |
+        * `on` - power on, no-op if already on
+        * `off` - soft off, a short click on the power button
+        * `off_hard` - long press on the power button
+        * `reset_hard` - click on the reset button
+      enum: ["on", "off", "off_hard", "reset_hard"]
+    AtxButton:
+      type: string
+      enum: [power, power_long, reset]
+    SwitchColorSpec:
+      type: string
+      pattern: "^([0-9a-fA-F]{6}:[0-9a-fA-F]{2}:[0-9a-fA-F]{4}|default)$"
+      example: "FFA500:BF:0028"
+
+    InfoResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/InfoState"
+    InfoState:
+      type: object
+      description: Only the requested categories are present
+      properties:
+        auth:
+          $ref: "#/components/schemas/InfoAuth"
+        extras:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/InfoExtra"
+        fan:
+          $ref: "#/components/schemas/InfoFan"
+        hw:
+          $ref: "#/components/schemas/InfoHw"
+        health:
+          $ref: "#/components/schemas/InfoHealth"
+        meta:
+          $ref: "#/components/schemas/InfoMeta"
+        node:
+          $ref: "#/components/schemas/InfoNode"
+        system:
+          $ref: "#/components/schemas/InfoSystem"
+        uptime:
+          $ref: "#/components/schemas/InfoUptime"
+    InfoAuth:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+    InfoExtra:
+      type: object
+      description: A web UI extra such as VNC, IPMI or the web terminal
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+        path:
+          type: string
+        daemon:
+          type: string
+        port:
+          type: integer
+        place:
+          type: integer
+        keyboard_cap:
+          type: boolean
+        enabled:
+          type: boolean
+        started:
+          type: boolean
+    InfoFan:
+      type: object
+      properties:
+        monitored:
+          type: boolean
+        state:
+          nullable: true
+          $ref: "#/components/schemas/FanState"
+    FanState:
+      type: object
+      properties:
+        fan:
+          type: object
+          properties:
+            ok:
+              type: boolean
+            pwm:
+              type: integer
+            speed:
+              type: number
+            last_fail_ts:
+              type: number
+        hall:
+          type: object
+          properties:
+            available:
+              type: boolean
+            rpm:
+              type: integer
+        service:
+          type: object
+          properties:
+            now_ts:
+              type: number
+        temp:
+          type: object
+          properties:
+            real:
+              type: number
+            fixed:
+              type: number
+    InfoHw:
+      type: object
+      description: Legacy category combining `health` and `platform`
+      properties:
+        health:
+          $ref: "#/components/schemas/InfoHealth"
+        platform:
+          $ref: "#/components/schemas/InfoPlatform"
+    InfoHealth:
+      type: object
+      properties:
+        cpu:
+          type: object
+          properties:
+            percent:
+              type: number
+        mem:
+          type: object
+          properties:
+            available:
+              type: integer
+              format: int64
+            percent:
+              type: number
+            total:
+              type: integer
+              format: int64
+        temp:
+          type: object
+          properties:
+            cpu:
+              type: number
+            gpu:
+              type: number
+        throttling:
+          nullable: true
+          $ref: "#/components/schemas/InfoThrottling"
+    InfoThrottling:
+      type: object
+      properties:
+        ignore_past:
+          type: boolean
+        raw_flags:
+          type: integer
+        parsed_flags:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/InfoThrottlingFlag"
+    InfoThrottlingFlag:
+      type: object
+      properties:
+        now:
+          type: boolean
+        past:
+          type: boolean
+    InfoPlatform:
+      type: object
+      properties:
+        type:
+          type: string
+          example: rpi
+        base:
+          type: string
+          example: Raspberry Pi Compute Module 4 Rev 1.1
+        board:
+          type: string
+          example: rpi4
+        model:
+          type: string
+          example: v4plus
+        serial:
+          type: string
+        video:
+          type: string
+          example: hdmi
+    InfoMeta:
+      type: object
+      description: Contents of the meta configuration; `server.host` is always present
+      additionalProperties: true
+      properties:
+        server:
+          type: object
+          properties:
+            host:
+              type: string
+        kvm:
+          type: object
+          additionalProperties: true
+    InfoNode:
+      type: object
+      properties:
+        host:
+          type: string
+    InfoSystem:
+      type: object
+      properties:
+        kvmd:
+          type: object
+          properties:
+            version:
+              type: string
+        streamer:
+          type: object
+          properties:
+            app:
+              type: string
+            version:
+              type: string
+            features:
+              type: object
+              additionalProperties:
+                type: boolean
+        kernel:
+          type: object
+          properties:
+            system:
+              type: string
+            release:
+              type: string
+            version:
+              type: string
+            machine:
+              type: string
+        platform:
+          $ref: "#/components/schemas/InfoPlatform"
+    InfoUptime:
+      type: object
+      properties:
+        total:
+          type: integer
+          format: int64
+          description: Seconds
+        parts:
+          type: object
+          properties:
+            days:
+              type: integer
+            hours:
+              type: integer
+            minutes:
+              type: integer
+            seconds:
+              type: integer
+
+    HidStateResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/HidState"
+    HidState:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        online:
+          type: boolean
+        busy:
+          type: boolean
+        connected:
+          type: boolean
+          nullable: true
+          description: "`null` when the backend can not be disconnected"
+        jiggler:
+          $ref: "#/components/schemas/HidJiggler"
+        keyboard:
+          $ref: "#/components/schemas/HidKeyboard"
+        mouse:
+          $ref: "#/components/schemas/HidMouse"
+    HidJiggler:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        active:
+          type: boolean
+        interval:
+          type: integer
+          description: Seconds
+    HidKeyboard:
+      type: object
+      properties:
+        online:
+          type: boolean
+        leds:
+          type: object
+          properties:
+            caps:
+              type: boolean
+            scroll:
+              type: boolean
+            num:
+              type: boolean
+        outputs:
+          $ref: "#/components/schemas/HidOutputs"
+    HidMouse:
+      type: object
+      properties:
+        online:
+          type: boolean
+        absolute:
+          type: boolean
+        outputs:
+          $ref: "#/components/schemas/HidOutputs"
+    HidOutputs:
+      type: object
+      properties:
+        active:
+          type: string
+        available:
+          type: array
+          items:
+            type: string
+    HidInactivityResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          type: object
+          properties:
+            inactivity:
+              type: number
+              description: Seconds since the last HID event
+    HidKeymapsResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          type: object
+          properties:
+            keymaps:
+              type: object
+              properties:
+                default:
+                  type: string
+                available:
+                  type: array
+                  items:
+                    type: string
+
+    AtxStateResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/AtxState"
+    AtxState:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        busy:
+          type: boolean
+          description: An operation is in progress and commands are rejected
+        acts:
+          type: object
+          properties:
+            power:
+              type: boolean
+            reset:
+              type: boolean
+        leds:
+          type: object
+          properties:
+            power:
+              type: boolean
+            hdd:
+              type: boolean
+
+    MsdStateResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/MsdState"
+    MsdState:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        online:
+          type: boolean
+        busy:
+          type: boolean
+        drive:
+          $ref: "#/components/schemas/MsdDrive"
+        storage:
+          nullable: true
+          $ref: "#/components/schemas/MsdStorage"
+    MsdDrive:
+      type: object
+      properties:
+        image:
+          nullable: true
+          $ref: "#/components/schemas/MsdImage"
+        connected:
+          type: boolean
+        cdrom:
+          type: boolean
+        rw:
+          type: boolean
+    MsdStorage:
+      type: object
+      properties:
+        images:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/MsdImage"
+        parts:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/MsdPart"
+        uploading:
+          nullable: true
+          $ref: "#/components/schemas/MsdTransfer"
+        downloading:
+          nullable: true
+          $ref: "#/components/schemas/MsdTransfer"
+    MsdImage:
+      type: object
+      properties:
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+        mod_ts:
+          type: number
+          description: Modification time as a UNIX timestamp
+        complete:
+          type: boolean
+        in_storage:
+          type: boolean
+        removable:
+          type: boolean
+        writable:
+          type: boolean
+    MsdPart:
+      type: object
+      properties:
+        size:
+          type: integer
+          format: int64
+        free:
+          type: integer
+          format: int64
+        writable:
+          type: boolean
+    MsdTransfer:
+      type: object
+      properties:
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+        written:
+          type: integer
+          format: int64
+    MsdWriteResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          type: object
+          properties:
+            image:
+              $ref: "#/components/schemas/MsdTransfer"
+
+    GpioStateResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/GpioState"
+    GpioState:
+      type: object
+      properties:
+        model:
+          $ref: "#/components/schemas/GpioModel"
+        state:
+          $ref: "#/components/schemas/GpioChannelsState"
+    GpioModel:
+      type: object
+      properties:
+        scheme:
+          type: object
+          properties:
+            inputs:
+              type: object
+              additionalProperties:
+                $ref: "#/components/schemas/GpioInputScheme"
+            outputs:
+              type: object
+              additionalProperties:
+                $ref: "#/components/schemas/GpioOutputScheme"
+        view:
+          $ref: "#/components/schemas/GpioView"
+    GpioHw:
+      type: object
+      properties:
+        driver:
+          type: string
+        pin:
+          type: string
+    GpioInputScheme:
+      type: object
+      properties:
+        hw:
+          $ref: "#/components/schemas/GpioHw"
+    GpioOutputScheme:
+      type: object
+      properties:
+        hw:
+          $ref: "#/components/schemas/GpioHw"
+        switch:
+          type: boolean
+        pulse:
+          type: object
+          properties:
+            delay:
+              type: number
+            min_delay:
+              type: number
+            max_delay:
+              type: number
+    GpioView:
+      type: object
+      description: Layout of the GPIO menu in the web UI
+      properties:
+        header:
+          type: object
+          properties:
+            title:
+              type: array
+              items:
+                $ref: "#/components/schemas/GpioViewItem"
+        table:
+          type: array
+          description: Rows of items, `null` rows are separators
+          items:
+            type: array
+            nullable: true
+            items:
+              $ref: "#/components/schemas/GpioViewItem"
+    GpioViewItem:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [label, input, output]
+        text:
+          type: string
+        channel:
+          type: string
+        color:
+          type: string
+        confirm:
+          type: boolean
+        hide:
+          type: boolean
+    GpioChannelsState:
+      type: object
+      properties:
+        inputs:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/GpioInputState"
+        outputs:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/GpioOutputState"
+    GpioInputState:
+      type: object
+      properties:
+        online:
+          type: boolean
+        state:
+          type: boolean
+    GpioOutputState:
+      type: object
+      properties:
+        online:
+          type: boolean
+        state:
+          type: boolean
+        busy:
+          type: boolean
+
+    StreamerStateResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/StreamerState"
+    StreamerState:
+      type: object
+      properties:
+        features:
+          type: object
+          properties:
+            quality:
+              type: boolean
+            resolution:
+              type: boolean
+            h264:
+              type: boolean
+        limits:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/StreamerLimit"
+        params:
+          $ref: "#/components/schemas/StreamerParams"
+        applied:
+          $ref: "#/components/schemas/StreamerParams"
+        snapshot:
+          type: object
+          properties:
+            saved:
+              nullable: true
+              $ref: "#/components/schemas/StreamerSnapshotInfo"
+        streamer:
+          nullable: true
+          $ref: "#/components/schemas/StreamerRuntime"
+    StreamerLimit:
+      type: object
+      properties:
+        min:
+          type: integer
+        max:
+          type: integer
+    StreamerParams:
+      type: object
+      properties:
+        quality:
+          type: integer
+        desired_fps:
+          type: integer
+        resolution:
+          type: string
+        h264_bitrate:
+          type: integer
+        h264_gop:
+          type: integer
+    StreamerSnapshotInfo:
+      type: object
+      properties:
+        width:
+          type: integer
+        height:
+          type: integer
+        mtime:
+          type: number
+        online:
+          type: boolean
+    StreamerRuntime:
+      type: object
+      description: State reported by the running streamer process
+      properties:
+        instance_id:
+          type: string
+        encoder:
+          type: object
+          properties:
+            type:
+              type: string
+            quality:
+              type: integer
+        h264:
+          type: object
+          properties:
+            online:
+              type: boolean
+            bitrate:
+              type: integer
+            gop:
+              type: integer
+            fps:
+              type: integer
+        drm:
+          type: object
+          properties:
+            live:
+              type: boolean
+            fps:
+              type: integer
+        sinks:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              has_clients:
+                type: boolean
+        source:
+          type: object
+          properties:
+            online:
+              type: boolean
+            desired_fps:
+              type: integer
+            captured_fps:
+              type: integer
+            resolution:
+              type: object
+              properties:
+                width:
+                  type: integer
+                height:
+                  type: integer
+        stream:
+          type: object
+          properties:
+            clients:
+              type: integer
+            queued_fps:
+              type: integer
+            clients_stat:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: true
+    OcrStateResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          type: object
+          properties:
+            ocr:
+              $ref: "#/components/schemas/OcrState"
+    OcrState:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        langs:
+          type: object
+          properties:
+            available:
+              type: array
+              items:
+                type: string
+            default:
+              type: array
+              items:
+                type: string
+
+    SwitchStateResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/SwitchState"
+    SwitchState:
+      type: object
+      description: Per-port arrays are indexed by the continuous port number, per-unit arrays by unit number
+      properties:
+        model:
+          $ref: "#/components/schemas/SwitchModel"
+        summary:
+          type: object
+          properties:
+            active_port:
+              type: integer
+              description: Continuous number of the active port, `-1` when none
+            active_id:
+              type: string
+              description: Active port in `unit.port` form
+            synced:
+              type: boolean
+        edids:
+          $ref: "#/components/schemas/SwitchEdids"
+        colors:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SwitchColor"
+        video:
+          type: object
+          properties:
+            links:
+              type: array
+              items:
+                type: boolean
+        usb:
+          type: object
+          properties:
+            links:
+              type: array
+              items:
+                type: boolean
+        beacons:
+          type: object
+          properties:
+            uplinks:
+              type: array
+              items:
+                type: boolean
+            downlinks:
+              type: array
+              items:
+                type: boolean
+            ports:
+              type: array
+              items:
+                type: boolean
+        atx:
+          type: object
+          properties:
+            busy:
+              type: array
+              items:
+                type: boolean
+            leds:
+              type: object
+              properties:
+                power:
+                  type: array
+                  items:
+                    type: boolean
+                hdd:
+                  type: array
+                  items:
+                    type: boolean
+    SwitchModel:
+      type: object
+      properties:
+        firmware:
+          $ref: "#/components/schemas/SwitchFirmware"
+        limits:
+          type: object
+          properties:
+            atx:
+              type: object
+              properties:
+                click_delays:
+                  type: object
+                  additionalProperties:
+                    $ref: "#/components/schemas/SwitchDelayLimit"
+        units:
+          type: array
+          items:
+            type: object
+            properties:
+              firmware:
+                $ref: "#/components/schemas/SwitchFirmware"
+        ports:
+          type: array
+          items:
+            $ref: "#/components/schemas/SwitchPort"
+    SwitchFirmware:
+      type: object
+      properties:
+        version:
+          type: integer
+        devbuild:
+          type: boolean
+    SwitchDelayLimit:
+      type: object
+      properties:
+        default:
+          type: number
+        min:
+          type: number
+        max:
+          type: number
+    SwitchPort:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "`unit.port` form, 1-based"
+          example: "1.4"
+        unit:
+          type: integer
+          description: 0-based unit number
+        channel:
+          type: integer
+          description: 0-based port number on the unit
+        name:
+          type: string
+        video:
+          type: object
+          properties:
+            dummy:
+              type: boolean
+        atx:
+          type: object
+          properties:
+            click_delays:
+              type: object
+              additionalProperties:
+                type: number
+    SwitchEdids:
+      type: object
+      properties:
+        all:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SwitchEdid"
+        used:
+          type: array
+          description: EDID id used by each port
+          items:
+            type: string
+    SwitchEdid:
+      type: object
+      properties:
+        name:
+          type: string
+        data:
+          type: string
+          description: Hex encoded EDID
+        parsed:
+          nullable: true
+          $ref: "#/components/schemas/SwitchEdidParsed"
+    SwitchEdidParsed:
+      type: object
+      properties:
+        mfc_id:
+          type: string
+        product_id:
+          type: integer
+        serial:
+          type: integer
+          format: int64
+        monitor_name:
+          type: string
+        monitor_serial:
+          type: string
+        audio:
+          type: boolean
+    SwitchColor:
+      type: object
+      properties:
+        red:
+          type: integer
+        green:
+          type: integer
+        blue:
+          type: integer
+        brightness:
+          type: integer
+        blink_ms:
+          type: integer
+    SwitchEdidCreateResponse:
+      type: object
+      required: [ok, result]
+      properties:
+        ok:
+          type: boolean
+        result:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+
+    RedfishLink:
+      type: object
+      properties:
+        "@odata.id":
+          type: string
+    RedfishServiceRoot:
+      type: object
+      properties:
+        "@odata.id":
+          type: string
+        "@odata.type":
+          type: string
+        Id:
+          type: string
+        Name:
+          type: string
+        RedfishVersion:
+          type: string
+        Systems:
+          $ref: "#/components/schemas/RedfishLink"
+        Managers:
+          $ref: "#/components/schemas/RedfishLink"
+    RedfishCollection:
+      type: object
+      properties:
+        "@odata.id":
+          type: string
+        "@odata.type":
+          type: string
+        Name:
+          type: string
+        Members:
+          type: array
+          items:
+            $ref: "#/components/schemas/RedfishLink"
+        "Members@odata.count":
+          type: integer
+    RedfishComputerSystem:
+      type: object
+      properties:
+        "@odata.id":
+          type: string
+        "@odata.type":
+          type: string
+        Id:
+          type: string
+        HostName:
+          type: string
+        PowerState:
+          type: string
+          enum: ["On", "Off", "PoweringOn", "PoweringOff"]
+        Boot:
+          type: object
+          properties:
+            BootSourceOverrideEnabled:
+              type: string
+            BootSourceOverrideTarget:
+              type: string
+              nullable: true
+        Actions:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/RedfishAction"
+    RedfishAction:
+      type: object
+      properties:
+        target:
+          type: string
+        "ResetType@Redfish.AllowableValues":
+          type: array
+          items:
+            type: string
+    RedfishResetBody:
+      type: object
+      required: [ResetType]
+      properties:
+        ResetType:
+          type: string
+          description: |
+            * `On` - power on
+            * `ForceOff` - hard power off
+            * `GracefulShutdown` - soft power off
+            * `ForceRestart` - hard reset
+            * `ForceOn` - force power on
+            * `PushPowerButton` - short press on the power button
+          enum: ["On", "ForceOff", "GracefulShutdown", "ForceRestart", "ForceOn", "PushPowerButton"]

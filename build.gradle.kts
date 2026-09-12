@@ -31,7 +31,7 @@ dependencies {
 
 tasks {
   withType<JavaCompile>().configureEach {
-    mustRunAfter("openApiGenerate")
+    dependsOn("openApiGenerate")
     options.errorprone.disableWarningsInGeneratedCode = true
     options.errorprone.disable("MissingSummary", "ParameterName")
   }
@@ -42,18 +42,19 @@ tasks {
 testing { suites { named<JvmTestSuite>("test") { useJUnitJupiter() } } }
 
 spotless {
-  java { googleJavaFormat() }
+  // Generated sources are not committed, so only format the hand-written ones.
+  java {
+    target("src/**/*.java")
+    googleJavaFormat()
+  }
   kotlinGradle { ktfmt() }
 }
 
 openApiGenerate {
-  setInputSpec(
-      "https://raw.githubusercontent.com/rclone/rclone-openapi/refs/heads/main/openapi.yaml"
-  )
+  inputSpec = layout.projectDirectory.file("openapi.yaml")
   invokerPackage = "${project.group}.${project.name}"
   apiPackage = "${invokerPackage.get()}.api"
   modelPackage = "${invokerPackage.get()}.model"
-  modelNameSuffix = "Body"
   generatorName = "java"
   library = "microprofile"
   configOptions.put("configKey", project.name)
@@ -63,7 +64,9 @@ openApiGenerate {
   configOptions.put("useRuntimeException", "true")
   configOptions.put("useSingleRequestParameter", "true")
   configOptions.put("microprofileGlobalExceptionMapper", "false")
-  nameMappings.put("_group", $$"$group")
+  // Binary responses: small ones as byte[], large ones as a stream.
+  schemaMappings.put("BinaryDownload", "byte[]")
+  schemaMappings.put("BinaryStream", "java.io.InputStream")
 }
 
 sourceSets { main { java { srcDir(openApiGenerate.outputDir.dir("src/main/java")) } } }
