@@ -189,7 +189,7 @@ paths:
       summary: Get the log of all KVMD services as plain text
       description: |
         With `follow=true` the response never ends and new records are streamed
-        as they appear; a client that buffers the whole body will not return.
+        as they appear, about a second after they are logged.
       parameters:
         - name: follow
           in: query
@@ -206,11 +206,11 @@ paths:
             default: 0
       responses:
         "200":
-          description: Log records, one per line
+          description: Log records, one per line, sent as one chunk per record
           content:
             text/plain:
               schema:
-                type: string
+                $ref: "#/components/schemas/TextStream"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1744,6 +1744,10 @@ components:
       type: string
       format: binary
       description: Large binary payload, mapped to `java.io.InputStream` by the Java generator
+    TextStream:
+      type: string
+      format: binary
+      description: UTF-8 text streamed line by line and possibly never ending, mapped to `java.io.InputStream` by the Java generator
     MsdCompression:
       type: string
       enum: [none, lzma, zstd]

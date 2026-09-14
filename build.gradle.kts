@@ -67,6 +67,7 @@ openApiGenerate {
   // Binary responses: small ones as byte[], large ones as a stream.
   schemaMappings.put("BinaryDownload", "byte[]")
   schemaMappings.put("BinaryStream", "java.io.InputStream")
+  schemaMappings.put("TextStream", "java.io.InputStream")
 }
 
 sourceSets { main { java { srcDir(openApiGenerate.outputDir.dir("src/main/java")) } } }

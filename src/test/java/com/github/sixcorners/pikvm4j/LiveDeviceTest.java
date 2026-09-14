@@ -18,8 +18,12 @@ import com.github.sixcorners.pikvm4j.api.StreamerApi;
 import com.github.sixcorners.pikvm4j.api.SwitchApi;
 import com.github.sixcorners.pikvm4j.api.SystemApi;
 import com.github.sixcorners.pikvm4j.model.InfoResponse;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
@@ -119,9 +123,26 @@ class LiveDeviceTest {
   }
 
   @Test
-  void log() {
-    String log = api(SystemApi.class).getLog(SystemApi.GetLogRequest.newInstance().seek(60));
-    assertTrue(log.contains("kvmd"), log);
+  void log() throws IOException {
+    try (InputStream log =
+        api(SystemApi.class).getLog(SystemApi.GetLogRequest.newInstance().seek(60))) {
+      String text = new String(log.readAllBytes(), StandardCharsets.UTF_8);
+      assertTrue(text.contains("kvmd"), text);
+    }
+  }
+
+  @Test
+  void logFollow() throws IOException {
+    // The stream never ends, so read a single record and close it.
+    try (InputStream log =
+            api(SystemApi.class)
+                .getLog(SystemApi.GetLogRequest.newInstance().seek(60).follow(true));
+        BufferedReader reader =
+            new BufferedReader(new InputStreamReader(log, StandardCharsets.UTF_8))) {
+      String first = reader.readLine();
+      assertNotNull(first);
+      assertTrue(first.startsWith("["), first);
+    }
   }
 
   @Test
