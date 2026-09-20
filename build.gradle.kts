@@ -21,7 +21,7 @@ dependencies {
   compileOnly(platform("org.eclipse.microprofile:microprofile:7.1"))
   compileOnly("org.eclipse.microprofile.rest.client:microprofile-rest-client-api")
   compileOnly("jakarta.json:jakarta.json-api:2.1.3")
-  compileOnly("jakarta.json.bind:jakarta.json.bind-api:3.0.2")
+  compileOnly("jakarta.json.bind:jakarta.json.bind-api:3.0.3")
   compileOnly("jakarta.validation:jakarta.validation-api:3.1.1")
   compileOnly("com.fasterxml.jackson.core:jackson-annotations:2.22")
   testImplementation("org.jboss.resteasy.microprofile:microprofile-rest-client:3.0.1.Final")
