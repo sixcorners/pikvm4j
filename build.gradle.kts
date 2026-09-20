@@ -8,7 +8,7 @@ plugins {
   id("io.freefair.lombok") version "9.5.0"
   id("pl.allegro.tech.build.axion-release") version "1.21.2"
   id("org.kordamp.gradle.jandex") version "2.3.0"
-  id("org.openapi.generator") version "7.23.0"
+  id("org.openapi.generator") version "7.25.0"
 }
 
 group = "com.github.sixcorners"
