@@ -25,7 +25,7 @@ dependencies {
   compileOnly("jakarta.validation:jakarta.validation-api:3.1.1")
   compileOnly("com.fasterxml.jackson.core:jackson-annotations:2.22")
   testImplementation("org.jboss.resteasy.microprofile:microprofile-rest-client:3.0.1.Final")
-  testImplementation("org.jboss.resteasy:resteasy-json-binding-provider:7.0.2.Final")
+  testImplementation("org.jboss.resteasy:resteasy-json-binding-provider:7.0.5.Final")
   errorprone("com.google.errorprone:error_prone_core:2.50.0")
 }
 
