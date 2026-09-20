@@ -3,7 +3,7 @@ import net.ltgt.gradle.errorprone.errorprone
 plugins {
   `java-library`
   `maven-publish`
-  id("com.diffplug.spotless") version "8.8.0"
+  id("com.diffplug.spotless") version "8.10.2"
   id("net.ltgt.errorprone") version "5.1.0"
   id("io.freefair.lombok") version "9.5.0"
   id("pl.allegro.tech.build.axion-release") version "1.21.2"
