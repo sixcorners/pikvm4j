@@ -26,7 +26,7 @@ dependencies {
   compileOnly("com.fasterxml.jackson.core:jackson-annotations:2.22")
   testImplementation("org.jboss.resteasy.microprofile:microprofile-rest-client:3.0.1.Final")
   testImplementation("org.jboss.resteasy:resteasy-json-binding-provider:7.0.2.Final")
-  errorprone("com.google.errorprone:error_prone_core:2.50.0")
+  errorprone("com.google.errorprone:error_prone_core:2.51.0")
 }
 
 tasks {
